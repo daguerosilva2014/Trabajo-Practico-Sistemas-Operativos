@@ -1,8 +1,3 @@
-# tp-scaffold
-
-Esta es una plantilla de proyecto diseñada para generar un TP de Sistemas
-Operativos de la UTN FRBA.
-
 ## Dependencias
 
 Para poder compilar y ejecutar el proyecto, es necesario tener instalada la
