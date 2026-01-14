@@ -1,0 +1,134 @@
+#include <cpu.h>
+
+int main(int argc, char* argv[]) {
+    
+    saludar("cpu");
+
+    //INICIO Y LEO CONFIG
+    identificador_cpu = argv[1];  
+    char* pathConfig = malloc(strlen(identificador_cpu) + strlen("cpu.config") + 1);
+    strcpy(pathConfig,"cpu");
+    strcat(pathConfig,identificador_cpu);
+    strcat(pathConfig,".config");
+    config_cpu = iniciar_config(pathConfig);
+    leerConfigCpu(config_cpu);
+    free(pathConfig);
+    
+    //INICIO LOGGER
+    char* pathLogger = malloc(strlen(identificador_cpu) + strlen("cpuLogger.log") + 1);
+    strcpy(pathLogger,"cpuLogger");
+    strcat(pathLogger,identificador_cpu);
+    char* nombreLogger = strdup(pathLogger);
+    strcat(pathLogger,".log");
+
+    logger_cpu = iniciar_logger(pathLogger,nombreLogger,log_level);
+    free(nombreLogger);
+    free(pathLogger);
+
+
+    inicializar_recursos();
+    
+    
+    // INICIO HILOS
+    inicializar_hilos(config_cpu);
+    
+    inicializar_cache();
+
+
+    while(1)
+    {
+        ciclo_instruccion(socket_cpu_memoria);
+        
+    }
+
+    pthread_join(hilo_escuchar_memoria,NULL);
+    pthread_join(hilo_escuchar_kernel,NULL);
+    pthread_join(hilo_escuchar_kernel_interrupcion,NULL);
+
+    signal(SIGINT,liberarRecursos);
+    return 0;
+}
+
+void leerConfigCpu(t_config* config_cpu) {
+    ip_memoria = config_get_string_value(config_cpu, "IP_MEMORIA");
+    puerto_memoria = config_get_string_value(config_cpu, "PUERTO_MEMORIA");
+    ip_kernel = config_get_string_value(config_cpu, "IP_KERNEL");
+    puerto_kernel_dispatch = config_get_string_value(config_cpu, "PUERTO_KERNEL_DISPATCH");
+    puerto_kernel_interrupt = config_get_string_value(config_cpu, "PUERTO_KERNEL_INTERRUPT");
+    entradas_tlb = config_get_int_value(config_cpu, "ENTRADAS_TLB");
+    reemplazo_tlb = config_get_string_value(config_cpu, "REEMPLAZO_TLB");
+    entradas_cache = config_get_int_value(config_cpu, "ENTRADAS_CACHE");
+    reemplazo_cache = config_get_string_value(config_cpu, "REEMPLAZO_CACHE");
+    retardo_cache = config_get_int_value(config_cpu, "RETARDO_CACHE");
+    log_level = log_level_from_string(config_get_string_value(config_cpu, "LOG_LEVEL"));
+    
+}
+
+void inicializar_hilos(t_config* config_cpu)
+{
+    socket_cpu_memoria = crear_conexion(logger_cpu, ip_memoria, puerto_memoria);
+    hilo_escuchar_memoria = escuchar_memoria();
+    enviarOpCode(socket_cpu_memoria,SOLICITUD_ESTRUCTURA_MEMORIA);
+    sem_wait(&llegaron_tam);
+
+    socket_cpu_kernel_dispatch = crear_conexion(logger_cpu, ip_kernel, puerto_kernel_dispatch);
+    crear_handshake_cpu_kernel_dispatch(socket_cpu_kernel_dispatch);
+    hilo_escuchar_kernel = escuchar_kernel();
+
+    socket_cpu_kernel_interrupt = crear_conexion(logger_cpu,ip_kernel, puerto_kernel_interrupt); // CPU SERVIDOR DE KERNEL INTERRUPT -> envia a kernel el estado actual
+    crear_handshake_cpu_kernel_interrupt(socket_cpu_kernel_interrupt);
+	hilo_escuchar_kernel_interrupcion = escuchar_interrupcion_kernel();
+
+    //ESTE SI LO DESCOMENTO, TIRA SEG FAULT PORQUE INICIA EL HILO EN DECODE, HABRIA QUE PONER SEMAFORO SUPONGO!!
+}
+
+void inicializar_recursos()
+{
+    // Inicializar semaforos
+    sem_init(&sem_hay_instruccion, 0, 0);
+    sem_init(&sem_interrupcion, 0, 1);
+    sem_init(&semFetch,0,1);
+    sem_init(&semOKDispatch,0,0);
+    sem_init(&semContextoCargado,0,0);
+    sem_init(&semMutexContexto,0,1);
+    sem_init(&semLlegoPeticionMMU,0,0);
+    sem_init(&semOkEscritura,0,0);
+    sem_init(&semLlegoPeticionTabla,0,0);
+
+    sem_init(&sem_pagina_recibida, 0, 0);
+    sem_init(&sem_pagina_escrita,0,0);
+    sem_init(&sem_valor_leido, 0, 0);
+
+    sem_init(&mutex_motivo_interrupcion, 0,1);
+    sem_init(&mutex_lista_tlb,0,1);
+    sem_init(&llegaron_tam,0,0);
+
+    sem_init(&semFinCicloInstruccion,0,1);
+
+    iniciar_diccionario_instrucciones();
+    
+    
+
+    lista_tlb = list_create();
+    contexto = malloc(sizeof(t_contexto_cpu));
+    contextoAnterior = malloc(sizeof(t_contexto_cpu));
+}
+
+
+
+
+void liberarRecursos(int signal)
+{
+    if(signal != SIGINT)
+        return;
+
+    config_destroy(config_cpu);
+    log_destroy(logger_cpu);
+    destruir_diccionarios();
+    liberar_cache();
+    list_clean_and_destroy_elements(lista_tlb, destruir_entrada_tlb);
+    close(socket_cpu_kernel_dispatch);
+    close(socket_cpu_kernel_interrupt);
+    close(socket_cpu_memoria);
+    exit(1);
+}
